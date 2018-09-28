@@ -272,7 +272,10 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 
 			if (!localConfig.mirror) {
 				position.X *= -1;
-				// TO DO: also flip orientation
+				// Not using rotation data, so not actually tested
+				// When Blender does a reflection paste on a quaternion, it just flips the signs of both Y & Z
+				orientation.y *= -1;
+				orientation.z *= -1;
 			}
 
 			// adjust Y for the camera distance from the floor

@@ -60,7 +60,7 @@ Note: For the [MakeHuman Community Blender add-on](https://github.com/makehumanc
 
 There are 4 entry points which are exported in the DLL.  Most return a `HRESULT`, which is an integer where 0 indicates a successful result.
 
-###openSensor, ordinal 4:##
+###openSensor, ordinal 4:###
 
 ```c
 /**
