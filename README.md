@@ -46,9 +46,7 @@ C++ wrapper DLL of Joints for Motion Capture of multiple bodies using a Kinect v
 
 ## Requirements ##
 
-A Kinect v2 sensor, connected to a Windows 8 or greater PC, using the Kinect Adapter, into a USB 3 port is required.  There are no drivers which come automatically, as far as I know.  You might connect it, and try a 'Check for Updates' from Windows setup / update, but not hopeful.
-
-There is a [Kinect SDK](https://www.microsoft.com/en-us/download/details.aspx?id=44561) which could be installed, but it is only required when compiling from source.  There are a few interesting sample applications in the SDK though.  In the `kinectRuntime` directory of the repo, are the re-distributable driver installs from the SDK.  See that directory's readme for more.
+A Kinect v2 sensor, connected to a Windows 8 or greater PC, using the Kinect Adapter, into a USB 3 port is required.  The [Runtime driver](https://www.microsoft.com/en-us/download/details.aspx?id=44559) and directions can be downloaded from Microsoft.  There is also a [Kinect SDK](https://www.microsoft.com/en-us/download/details.aspx?id=44561) which could be installed, but it is only required when compiling from source.  There are a few interesting sample applications in the SDK though.
 
 ## Pre-compiled Media ##
 
@@ -60,7 +58,7 @@ Note: For the [MakeHuman Community Blender add-on](https://github.com/makehumanc
 
 There are 4 entry points which are exported in the DLL.  Most return a `HRESULT`, which is an integer where 0 indicates a successful result.
 
-###openSensor, ordinal 4:###
+### openSensor, ordinal 4: ###
 
 ```c
 /**
@@ -73,16 +71,16 @@ DllExport HRESULT openSensor(char actionPoseStart, char Forward_or_Mirror)
 
 This must be the first call. It is broken out from beginning an actual body tracking session, because there are many more things a sensor can do.  Any addition of other capabilities would all begin with an opening of the sensor.  Arguments which might seem could be specified when beginning body tracking are done here instead, since they may also be relevant for other features.
 
-####actionPoseStart-####
+#### actionPoseStart- ####
 
 This is a switch for when to start returning data, after calling beginBodyTracking.  When 'true', no data will be returned until a body raises their hands above their shoulders, or T pose.  This is very useful when the operator of the program & the one being scanned is the same person.  If the application is recording root bone translation relative to the first frame, you do not want the frame of them running out into the sensor's field being the first frame.  When there are multiple bodies, only one body needs to signal to start, once everyone is in place.
 
 A beep will also give audio feedback that recording has begun.  Actually, any frame where the number of bodies is different from the previous frame causes a beep.  For the first frame, the previous frame was 0.  This can be very useful for mapping out the field where scanning takes place.  Note: the console .exe does not beep, since this is a windows MessageBeep() call.
 
-####Forward_or_Mirror-####
+#### Forward_or_Mirror- ####
 The data returned by the sensor is always as if looking into a mirror.  For data capture this is not desired.  When 'F', data returns suitable for data capture.  Note: rotation data is un-changed at this time.
 
-###beginBodyTracking, ordinal 1:###
+### beginBodyTracking, ordinal 1: ###
 
 ```c
 /**
@@ -94,7 +92,7 @@ DllExport HRESULT beginBodyTracking( void (*cb)(char *) )
 
 Returns scans of joints to the callback supplied.  The first frame returned will be numbered 0.  A Kinect v2 scans @ 30 fps, so time relative to the first frame can be calculated.  If a body is not present for a given scan, it will not be included.  If no bodies are found in a scan, then no data will be returned, but the frame number will be incremented.
 
-###endBodyTracking, ordinal 3:###
+### endBodyTracking, ordinal 3: ###
 
 ```c
 /**
@@ -105,7 +103,7 @@ DllExport void endBodyTracking()
 
 There is really no reason to call `endBodyTracking` unless there is more than one type of kinect scanning supported.  `closeSensor` will call this for you.
 
-###closeSensor, ordinal 2:###
+### closeSensor, ordinal 2: ###
 
 ```c
 /**
