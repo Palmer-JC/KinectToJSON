@@ -3,27 +3,40 @@
 // forward declare of non-external functions
 void bodyReaderThreadLoop();
 void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 clipPlane);
-bool detectTPose(Joint *joints);
+bool detectTPose(UINT64 bodyId, Joint *joints);
+bool isBodyRolling(UINT64 bodyId);
+void setBodyRolling(UINT64 bodyId);
 int formatVector(const CameraSpacePoint Position, const int idx);
 int formatQuaternion(const Vector4 Orientation, const int idx);
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // file scope variables
 IBodyFrameReader *bodyFrameReader = nullptr;
 void (*applicationCallback)(char *) = nullptr;
 CONFIG localConfig; // copy of main's; assigned when locked for thread safe transfer
-bool rolling = false;
-int nBodies = 0; // used to beep when changed
+
+// the XZ location of the SpinBase Joint of the first frame of the first body recorded; all locations offset by,
+// so that capturing of multiple bodies can be easily done
+CameraSpacePoint rootXZBasis;
+
+bool rolling = false; // has any frames been returned
+UINT64 rollingBodies[] = { 0, 0, 0, 0, 0 }; // the body ids that have passed the t-pose test, if using
+int nBodies = 0; // used to beep when value changed
+
 int frame = 0;
 bool clipPlaneEval = false; // used to print the height of the first non-zero reading of camera height, floor clip pane W
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // threading, and mutex for sharing applicationCallback & config across threads
 std::thread bodyThread;
 std::mutex mu;
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // storage for json
 #define BUF_SZ 10000
 char json[BUF_SZ];
 
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // vars from main.cpp
 extern IKinectSensor *sensor;
 extern CONFIG config;
@@ -31,7 +44,7 @@ extern CONFIG config;
 // constants, in the order reported by body frame reader
 const char SPINE_BASE[] = "SpineBase";         //  0
 const char SPINE_MID[] = "SpineMid";           //  1
-const char NECK[] = "Neck";                    //  2 
+const char NECK[] = "Neck";                    //  2
 const char HEAD[] = "Head";                    //  3
 
 const char SHOULDER_LEFT[] = "ShoulderLeft";   //  4
@@ -62,7 +75,7 @@ const char THUMB_LEFT[] = "ThumbLeft";         // 22
 const char HAND_TIP_RIGHT[] = "HandTipRight";  // 23
 const char THUMB_RIGHT[] = "ThumbRight";       // 24
 
-const char *JOINT_NAMES[] = { 
+const char *JOINT_NAMES[] = {
 	SPINE_BASE, SPINE_MID, NECK, HEAD,
 	SHOULDER_LEFT, ELBOW_LEFT, WRIST_LEFT, HAND_LEFT,
 	SHOULDER_RIGHT, ELBOW_RIGHT, WRIST_RIGHT, HAND_RIGHT,
@@ -89,7 +102,7 @@ const char *HAND_STATES[] = { UNKNOWN, NOT_TRACKED, OPEN, CLOSED, LASSO };
  * @param cb - The callback function which is passed the JSON as an argument.
  */
 DllExport HRESULT beginBodyTracking( void (*cb)(char *) ) {
-	// openSensor must have sucessfully been called first
+	// openSensor must have successfully been called first
 	if (sensor == nullptr) {
 		std::cerr << "Sensor Not open.\n";
 		return E_ABORT;
@@ -108,9 +121,11 @@ DllExport HRESULT beginBodyTracking( void (*cb)(char *) ) {
 		mu.lock();
 		applicationCallback = cb;
 
-		// make sure config can be assigned in the threadh which called openSensor(), and be visible in the body reader thread
+		// make sure config can be assigned in the thread which called openSensor(), and be visible in the body reader thread
 		localConfig.mirror = config.mirror;
 		localConfig.TPoseStart = config.TPoseStart;
+		localConfig.worldSpace = config.worldSpace;
+		rootXZBasis.Z = -1; // impossible to be behind the sensor, so can use this to detect no set yet
 		rolling = false;
 		frame = 0;
 		clipPlaneEval = false;
@@ -119,7 +134,7 @@ DllExport HRESULT beginBodyTracking( void (*cb)(char *) ) {
 		// start the body thread
 		bodyThread = std::thread (&bodyReaderThreadLoop);
 	}
-	
+
 	//We're done with bodyFrameSource, so we'll release it
 	SafeRelease(bodyFrameSource);
 
@@ -187,11 +202,6 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 	// increment the frame #, once rolling, even if the does not get written
 	if (rolling) frame++;
 
-	// get camera angle from clip plane to
-	float cameraAngleRadians = atan(clipPlane.z / clipPlane.y);
-	float cosCameraAngle = cos(cameraAngleRadians);
-	float sinCameraAngle = sin(cameraAngleRadians);
-
 	//	Matrix clipPlaneTransform = clipPlaneTransformMat(clipPlane);
 	if (!clipPlaneEval && clipPlane.w != 0) {
 		setCameraHeight(clipPlane.w);
@@ -215,7 +225,7 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 		if (FAILED(hr) || isTracked == false) {
 			continue;
 		}
-		
+
 		UINT64 id;
 		hr = body->get_TrackingId(&id);
 		if (FAILED(hr)) {
@@ -240,7 +250,7 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 		body->get_HandLeftState(&leftHandState);
 		body->get_HandRightState(&rightHandState);
 
-		if (!rolling && !detectTPose(joints)) {
+		if (!isBodyRolling(id) && !detectTPose(id, joints)) {
 			continue;
 		}
 
@@ -262,7 +272,7 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 		}
 		idx += sprintf_s(&json[idx], BUF_SZ - idx, "\n\t{");
 		idx += sprintf_s(&json[idx], BUF_SZ - idx, "\n\t\"id\": %I64d,", id);
-		idx += sprintf_s(&json[idx], BUF_SZ - idx, "\n\t\"bones\": {");
+		idx += sprintf_s(&json[idx], BUF_SZ - idx, "\n\t\"joints\": {");
 
 		// write out the joints
 		for (unsigned int i = 0; i < JointType_Count; i++) {
@@ -279,12 +289,30 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 			}
 
 			// adjust Y for the camera distance from the floor
-			position.Y = clipPlane.w + position.Y * cosCameraAngle + position.Z * sinCameraAngle;
+			if (localConfig.worldSpace) {
+				// get camera angle from clip plane to
+				float cameraAngleRadians = atan(clipPlane.z / clipPlane.y);
+				float cosCameraAngle = cos(cameraAngleRadians);
+				float sinCameraAngle = sin(cameraAngleRadians);
 
-			// adjust for camera location rotation (squedo code) TO DO
-//			Matrix cameraSpaceMatrix = compose(orientation, position);
-//			Matrix worldSpaceMatrix = multiply(cameraSpaceMatrix, clipPlaneTransform);
-//			decompose(worldSpaceMatrix, &orientation, &position);
+				position.Y = clipPlane.w + (position.Y * cosCameraAngle) + (position.Z * sinCameraAngle);
+				//	position.Z = position.Z * cosCameraAngle + position.Y * sinCameraAngle;
+
+					// adjust for camera location rotation (squedo code) TO DO
+					// https://gamedev.stackexchange.com/questions/80310/transform-world-space-using-kinect-floorclipplane-to-move-origin-to-floor-while
+		//			Matrix cameraSpaceMatrix = compose(orientation, position);
+		//			Matrix worldSpaceMatrix = multiply(cameraSpaceMatrix, clipPlaneTransform);
+		//			decompose(worldSpaceMatrix, &orientation, &position);
+			}
+
+			// Spine Base is the first joint reported, so just grab XZ, when basis not initialized
+			if (rootXZBasis.Z == -1) {
+				rootXZBasis.X = position.X;
+				rootXZBasis.Z = position.Z;
+				std::cout << printf("Root bone XZ basis set (meters) - X: %f, Z: %f\n", rootXZBasis.X, rootXZBasis.Z);
+			}
+			position.X -= rootXZBasis.X;
+			position.Z -= rootXZBasis.Z;
 
 			if (i > 0) {
 				idx += sprintf_s(&json[idx], BUF_SZ - idx, ",");
@@ -321,25 +349,46 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 	mu.unlock();
 }
 
-bool detectTPose(Joint *joints) {
+// this is not called once a T pose has been detected for a given body
+bool detectTPose(UINT64 bodyId, Joint *joints) {
 	float shoulderLeft = joints[4].Position.Y;
 	float shoulderRight = joints[8].Position.Y;
 
 	float handTipLeft = joints[21].Position.Y;
 	float handTipRight = joints[23].Position.Y;
+
+	if (shoulderLeft <= handTipLeft && shoulderRight  <= handTipRight) {
+			setBodyRolling(bodyId);
+
+		// make a beep signalling action detected
+		if (rolling) {
+			std::cout << printf("ID: %I64d passed TPose test-", bodyId);
+			std::cout << printf("\tshoulderLeft: %f, shoulderRight: %f, handTipLeft: %f, handTipRight: %f\n", shoulderLeft, shoulderRight, handTipLeft, handTipRight);
+		}
+		return true;
+	}
+	return false;
+}
+
+bool isBodyRolling(UINT64 bodyId) {
 	if (!localConfig.TPoseStart) {
 		rolling = true;
+		return true;
 	}
-	else {
-		rolling = shoulderLeft <= handTipLeft && shoulderRight <= handTipRight;
+	for (int i = 0; i < 6; i++) {
+		if (bodyId == rollingBodies[i])
+			return true;
 	}
-
-	// make a beep signalling action detected
-	if (rolling) {
-		MessageBeep(MB_OK);
-		std::cout << printf("TPose data- shoulderLeft: %f, shoulerRight: %f, handTipLeft: %f, handTipRight: %f\n", shoulderLeft, shoulderRight, handTipLeft, handTipRight);
+	return false;
+}
+void setBodyRolling(UINT64 bodyId) {
+	for (int i = 0; i < 6; i++) {
+		if (rollingBodies[i] == 0) {
+			rollingBodies[i] = bodyId;
+			rolling = true;
+			return;
+		}
 	}
-	return rolling;
 }
 
 int formatVector(const CameraSpacePoint Position, const int idx) {
