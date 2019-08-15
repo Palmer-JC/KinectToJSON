@@ -295,8 +295,9 @@ void processBodies(const unsigned int &bodyCount, IBody **bodies, const Vector4 
 				float cosCameraAngle = cos(cameraAngleRadians);
 				float sinCameraAngle = sin(cameraAngleRadians);
 
-				position.Y = clipPlane.w + (position.Y * cosCameraAngle) + (position.Z * sinCameraAngle);
-				//	position.Z = position.Z * cosCameraAngle + position.Y * sinCameraAngle;
+				position.Y  = clipPlane.w + position.Y * cosCameraAngle + position.Z * sinCameraAngle;
+				float adjustedZ =           position.Z * cosCameraAngle + position.Y * sinCameraAngle;
+				position.Z += position.Z - adjustedZ;
 
 					// adjust for camera location rotation (squedo code) TO DO
 					// https://gamedev.stackexchange.com/questions/80310/transform-world-space-using-kinect-floorclipplane-to-move-origin-to-floor-while
